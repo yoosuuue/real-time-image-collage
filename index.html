@@ -5,65 +5,59 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>shuroop.web</title>
     <style>
-        :root { --accent: #fff; }
         body { margin: 0; background: #000; overflow: hidden; font-family: -apple-system, sans-serif; }
         
-        /* 1. 하단 라이브 카메라 레이어 */
+        /* 미리보기 카메라 */
         #video { 
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+            position: fixed; top: 0; left: 0; 
+            width: 100vw; height: 100vh; 
             object-fit: cover; z-index: 1; 
         }
 
-        /* 2. 상단 콜라주 캔버스 레이어 (처음엔 투명) */
+        /* 콜라주 캔버스 */
         #mainCanvas { 
-            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; 
+            position: fixed; top: 0; left: 0; 
+            width: 100vw; height: 100vh; 
             z-index: 2; touch-action: none; 
+            background: transparent;
         }
 
-        /* UI 레이어 */
         .ui-layer { 
-            position: fixed; bottom: 40px; left: 0; width: 100%; 
+            position: fixed; bottom: 40px; width: 100%; 
             z-index: 10; display: flex; justify-content: center; gap: 15px; 
         }
         .btn { 
-            background: rgba(255, 255, 255, 0.2); border: 1px solid rgba(255, 255, 255, 0.4); 
-            padding: 12px 25px; border-radius: 50px; backdrop-filter: blur(15px);
-            font-size: 13px; font-weight: 600; color: #fff; cursor: pointer;
+            background: rgba(0, 0, 0, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            padding: 14px 28px; border-radius: 50px; backdrop-filter: blur(20px);
+            font-size: 14px; font-weight: 600; color: #fff; cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
         }
         .btn-save { background: #fff; color: #000; border: none; }
-        
-        .guide {
-            position: fixed; top: 25px; width: 100%; text-align: center;
-            color: rgba(255,255,255,0.7); font-size: 11px; z-index: 5; letter-spacing: 0.1em;
-        }
     </style>
 </head>
 <body>
 
-    <div class="guide">라이브 피드 위로 장면을 스크랩하여 쌓으세요</div>
-    
-    <video id="video" autoplay playsinline></video>
-    
+    <video id="video" autoplay playsinline muted></video>
     <canvas id="mainCanvas"></canvas>
 
     <div class="ui-layer">
         <button class="btn" onclick="clearCanvas()">RESET</button>
-        <button class="btn btn-save" onclick="saveImage()">SAVE COLLAGE</button>
+        <button class="btn btn-save" onclick="saveImage()">SAVE</button>
     </div>
 
     <script>
         const video = document.getElementById('video');
         const canvas = document.getElementById('mainCanvas');
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const ctx = canvas.getContext('2d', { alpha: true });
 
-        // 오프스크린 캔버스 (부드러운 브러시 처리를 위한 임시 공간)
+        // 오프스크린 캔버스로 브러시 정밀도 향상
         const offCanvas = document.createElement('canvas');
         const offCtx = offCanvas.getContext('2d');
 
         const W = 1206;
         const H = 2622;
         let isDrawing = false;
-        let brushSize = 100;
+        let brushSize = 90;
 
         async function init() {
             canvas.width = W;
@@ -71,27 +65,25 @@
             offCanvas.width = W;
             offCanvas.height = H;
 
-            // 배경은 투명하게 시작 (카메라가 보여야 하므로)
-            ctx.clearRect(0, 0, W, H);
-
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: 'environment', width: { ideal: H }, height: { ideal: W } },
                     audio: false
                 });
                 video.srcObject = stream;
+                video.play();
             } catch (err) {
-                alert("카메라를 켤 수 없습니다. HTTPS 환경인지 확인해주세요.");
+                alert("카메라 권한이 필요합니다.");
             }
         }
 
         function getPos(e) {
             const rect = canvas.getBoundingClientRect();
-            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const client = e.touches ? e.touches[0] : e;
+            // 캔버스 좌표 매핑 정밀도 강화
             return {
-                x: (clientX - rect.left) * (W / rect.width),
-                y: (clientY - rect.top) * (H / rect.height)
+                x: (client.clientX - rect.left) * (W / rect.width),
+                y: (client.clientY - rect.top) * (H / rect.height)
             };
         }
 
@@ -99,33 +91,36 @@
             if (!isDrawing) return;
             const pos = getPos(e);
 
-            // 1. 임시 캔버스 초기화
-            offCtx.clearRect(0, 0, W, H);
-
-            // 2. 임시 캔버스에 현재 카메라 프레임 전체를 그림
+            // 1. 오프스크린에 카메라 프레임 그리기 (cover 비율 정밀 계산)
             const vW = video.videoWidth;
             const vH = video.videoHeight;
             const scale = Math.max(W / vW, H / vH);
-            const dx = (W - vW * scale) / 2;
-            const dy = (H - vH * scale) / 2;
-            offCtx.drawImage(video, dx, dy, vW * scale, vH * scale);
+            const drawW = vW * scale;
+            const drawH = vH * scale;
+            const dx = (W - drawW) / 2;
+            const dy = (H - drawH) / 2;
 
-            // 3. 임시 캔버스에 부드러운 원형 마스크 적용 (끝으로 갈수록 흐려지게)
+            offCtx.clearRect(0, 0, W, H);
+            offCtx.drawImage(video, dx, dy, drawW, drawH);
+
+            // 2. 부드러운 브러시 마스킹
             offCtx.globalCompositeOperation = 'destination-in';
             const grad = offCtx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, brushSize);
             grad.addColorStop(0, 'rgba(0,0,0,1)');
-            grad.addColorStop(0.8, 'rgba(0,0,0,0.3)');
+            grad.addColorStop(0.6, 'rgba(0,0,0,0.5)');
             grad.addColorStop(1, 'rgba(0,0,0,0)');
+            
             offCtx.fillStyle = grad;
             offCtx.beginPath();
             offCtx.arc(pos.x, pos.y, brushSize, 0, Math.PI * 2);
             offCtx.fill();
 
-            // 4. 마스킹된 조각을 메인 캔버스(콜라주 판)에 덮어쓰기
+            // 3. 메인 캔버스에 조각 얹기
             ctx.globalCompositeOperation = 'source-over';
             ctx.drawImage(offCanvas, 0, 0);
         }
 
+        // 이벤트 리스너
         canvas.addEventListener('mousedown', (e) => { isDrawing = true; scrub(e); });
         window.addEventListener('mouseup', () => isDrawing = false);
         canvas.addEventListener('mousemove', scrub);
@@ -134,21 +129,21 @@
         canvas.addEventListener('touchend', () => isDrawing = false);
         canvas.addEventListener('touchmove', (e) => { e.preventDefault(); scrub(e); }, { passive: false });
 
+        // 리셋해도 카메라가 멈추지 않게 픽셀만 삭제
         function clearCanvas() {
-            if(confirm("콜라주를 비울까요?")) ctx.clearRect(0, 0, W, H);
+            ctx.clearRect(0, 0, W, H);
         }
 
         function saveImage() {
-            // 저장 시에는 흰색 배경을 깔아주고 저장 (투명 배경 방지)
             const saveCanvas = document.createElement('canvas');
             saveCanvas.width = W; saveCanvas.height = H;
-            const saveCtx = saveCanvas.getContext('2d');
-            saveCtx.fillStyle = "#fff";
-            saveCtx.fillRect(0, 0, W, H);
-            saveCtx.drawImage(canvas, 0, 0);
+            const sCtx = saveCanvas.getContext('2d');
+            sCtx.fillStyle = "#fff"; // 저장 시엔 배경을 흰색으로
+            sCtx.fillRect(0, 0, W, H);
+            sCtx.drawImage(canvas, 0, 0);
 
             const link = document.createElement('a');
-            link.download = `shuroop-collage-${Date.now()}.png`;
+            link.download = `shuroop-${Date.now()}.png`;
             link.href = saveCanvas.toDataURL('image/png');
             link.click();
         }
