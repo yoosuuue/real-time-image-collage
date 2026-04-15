@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>shuroop.web</title>
+    <style>
+        :root { --bg-color: #ffffff; --ui-color: #333333; }
+        body { margin: 0; background: var(--bg-color); overflow: hidden; font-family: -apple-system, sans-serif; }
+        
+        /* 실시간 카메라 (화면에는 보이지 않음) */
+        #video { position: fixed; width: 100%; height: 100%; object-fit: cover; display: none; }
+
+        /* 메인 작업 캔버스 */
+        #mainCanvas { 
+            position: fixed; top: 0; left: 0; 
+            width: 100vw; height: 100vh; 
+            z-index: 2; touch-action: none; 
+        }
+
+        /* 하단 메뉴 UI */
+        .ui-layer { 
+            position: fixed; bottom: 50px; left: 0; width: 100%; 
+            z-index: 10; display: flex; justify-content: center; gap: 20px; 
+        }
+        .btn { 
+            background: rgba(255, 255, 255, 0.9); border: none; 
+            padding: 14px 28px; border-radius: 50px; 
+            font-size: 14px; font-weight: 600; color: var(--ui-color);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08); cursor: pointer;
+            transition: transform 0.2s, background 0.2s;
+        }
+        .btn:active { transform: scale(0.92); background: #eee; }
+        .btn-save { background: var(--ui-color); color: #fff; }
+
+        /* 상단 가이드 */
+        .guide {
+            position: fixed; top: 30px; width: 100%; text-align: center;
+            color: #bbb; font-size: 12px; letter-spacing: 0.05em; z-index: 1; pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="guide">스크린을 문질러 현재의 조각을 채집하세요</div>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="mainCanvas"></canvas>
+
+    <div class="ui-layer">
+        <button class="btn" onclick="clearCanvas()">RESET</button>
+        <button class="btn btn-save" onclick="saveImage()">SAVE</button>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('mainCanvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+        // 이수님이 요청하신 타겟 해상도
+        const W = 1206;
+        const H = 2622;
+        let isDrawing = false;
+        let brushSize = 80; // 부드럽게 퍼지는 브러시 크기
+
+        async function init() {
+            // 캔버스 해상도 고정
+            canvas.width = W;
+            canvas.height = H;
+            ctx.fillStyle = "#ffffff"; 
+            ctx.fillRect(0, 0, W, H);
+
+            try {
+                // 후면 카메라 접근
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment', width: { ideal: H }, height: { ideal: W } },
+                    audio: false
+                });
+                video.srcObject = stream;
+            } catch (err) {
+                console.error("Camera Error:", err);
+                alert("카메라 권한 승인이 필요합니다.");
+            }
+        }
+
+        function getPointerPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            return {
+                x: (clientX - rect.left) * (W / rect.width),
+                y: (clientY - rect.top) * (H / rect.height)
+            };
+        }
+
+        function scrub(e) {
+            if (!isDrawing) return;
+            const pos = getPointerPos(e);
+
+            ctx.save();
+            
+            // 끝으로 갈수록 흐려지는 원형 마스크 생성
+            const gradient = ctx.createRadialGradient(
+                pos.x, pos.y, 0, 
+                pos.x, pos.y, brushSize
+            );
+            gradient.addColorStop(0, 'rgba(0,0,0,1)');
+            gradient.addColorStop(0.6, 'rgba(0,0,0,0.4)');
+            gradient.addColorStop(1, 'rgba(0,0,0,0)');
+
+            // 카메라 프레임을 현재 브러시 위치에 박제
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, brushSize, 0, Math.PI * 2);
+            ctx.clip();
+
+            // 비디오 화면비를 캔버스에 맞춰 계산
+            const vW = video.videoWidth;
+            const vH = video.videoHeight;
+            const scale = Math.max(W / vW, H / vH);
+            const dx = (W - vW * scale) / 2;
+            const dy = (H - vH * scale) / 2;
+
+            // 약간의 투명도를 주어 여러 번 문지르면 더 선명해지게 (슈룹의 감성)
+            ctx.globalAlpha = 0.6; 
+            ctx.drawImage(video, dx, dy, vW * scale, vH * scale);
+            
+            ctx.restore();
+        }
+
+        // 이벤트 리스너: 마우스 & 터치
+        canvas.addEventListener('mousedown', (e) => { isDrawing = true; scrub(e); });
+        window.addEventListener('mouseup', () => isDrawing = false);
+        canvas.addEventListener('mousemove', scrub);
+
+        canvas.addEventListener('touchstart', (e) => { isDrawing = true; scrub(e); });
+        canvas.addEventListener('touchend', () => isDrawing = false);
+        canvas.addEventListener('touchmove', (e) => { 
+            e.preventDefault(); 
+            scrub(e); 
+        }, { passive: false });
+
+        function clearCanvas() {
+            if(confirm("작업물을 초기화할까요?")) {
+                ctx.fillStyle = "#ffffff";
+                ctx.fillRect(0, 0, W, H);
+            }
+        }
+
+        function saveImage() {
+            const dataUrl = canvas.toDataURL('image/png');
+            const link = document.createElement('a');
+            link.download = `shuroop-${Date.now()}.png`;
+            link.href = dataUrl;
+            link.click();
+        }
+
+        // 앱 시작
+        init();
+    </script>
+</body>
+</html>
